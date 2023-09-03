@@ -5,6 +5,10 @@ if [ -z ${PX4_DOCKER_REPO+x} ]; then
 	if [[ $@ =~ .*px4_fmu.* ]]; then
 		# nuttx-px4fmu-v{1,2,3,4,5}
 		PX4_DOCKER_REPO="px4io/px4-dev-nuttx-focal:2022-08-12"
+	elif [[ $@ =~ .*gazebo.* ]] || [[ $@ =~ .*sitl* ]]; then
+		# px4_sitl gazebo  px4_sitl gazebo_rover px4_sitl gazebo_rover
+		# https://hamishwillee.gitbooks.io/havdevguide/content/en/simulation/gazebo.html
+		PX4_DOCKER_REPO="px4io/px4-dev-ros2-foxy:2022-07-31"
 	elif [[ $@ =~ .*navio2.* ]] || [[ $@ =~ .*raspberry.* ]] || [[ $@ =~ .*beaglebone.* ]] || [[ $@ =~ .*pilotpi.default ]]; then
 		# beaglebone_blue_default, emlid_navio2_default, px4_raspberrypi_default, scumaker_pilotpi_default
 		PX4_DOCKER_REPO="px4io/px4-dev-armhf:2023-06-26"
@@ -17,9 +21,9 @@ if [ -z ${PX4_DOCKER_REPO+x} ]; then
 	elif [[ $@ =~ .*clang.* ]] || [[ $@ =~ .*scan-build.* ]]; then
 		# clang tools
 		PX4_DOCKER_REPO="px4io/px4-dev-clang:2021-02-04"
-	elif [[ $@ =~ .*tests* ]]; then
+	elif [[ $@ =~ .*test* ]]; then
 		# run all tests with simulation
-		PX4_DOCKER_REPO="px4io/px4-dev-simulation-bionic:2021-12-11"
+		PX4_DOCKER_REPO="px4io/px4-dev-simulation-focal:latest"
 	fi
 else
 	echo "PX4_DOCKER_REPO is set to '$PX4_DOCKER_REPO'";
@@ -47,6 +51,13 @@ CCACHE_DIR=${HOME}/.ccache
 mkdir -p "${CCACHE_DIR}"
 
 docker run -it --rm -w "${SRC_DIR}" \
+        --privileged \
+        -e NVIDIA_VISIBLE_DEVICES=all \
+        -e NVIDIA_DRIVER_CAPABILITIES=all \
+        --gpus all \
+        -v /tmp/.X11-unix:/tmp/.X11-unix:ro \
+        -e DISPLAY=$DISPLAY \
+	--network host \
 	--env=AWS_ACCESS_KEY_ID \
 	--env=AWS_SECRET_ACCESS_KEY \
 	--env=BRANCH_NAME \

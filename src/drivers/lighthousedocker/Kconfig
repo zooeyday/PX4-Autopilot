@@ -1,0 +1,5 @@
+menuconfig DRIVERS_LIGHTHOUSEDOCKER
+	bool "lighthousedocker"
+	default n
+	---help---
+		Enable support for lighthousedocker

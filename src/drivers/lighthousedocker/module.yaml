@@ -1,0 +1,6 @@
+module_name: lighthousedocker
+serial_config:
+    - command: lighthousedocker start -d ${SERIAL_DEV}
+      port_config_param:
+        name: SENS_LHD_CFG
+        group: Sensors
