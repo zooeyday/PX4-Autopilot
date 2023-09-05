@@ -50,12 +50,33 @@
 #include <perf/perf_counter.h>
 #include <px4_platform_common/px4_config.h>
 #include <px4_platform_common/px4_work_queue/ScheduledWorkItem.hpp>
+
+
+// #include <cstdint>
+// #include <cstring>
+// #include <drivers/drv_hrt.h>
+// #include <px4_platform_common/defines.h>
+// #include <px4_platform_common/log.h>
+
+// #include <matrix/math.hpp>
+// #include <mathlib/mathlib.h>
+// #include <matrix/Matrix.hpp>
+// #include <lib/conversion/rotation.h>
+
+// #include <cstdint>
+// #include <cstring>
+// #include <drivers/drv_hrt.h>
+// #include <px4_platform_common/defines.h>
+// #include <px4_platform_common/log.h>
+
+
 #include <uORB/Publication.hpp>
+#include <uORB/Subscription.hpp>
+#include <uORB/topics/vehicle_attitude.h>
+#include <uORB/topics/vehicle_local_position.h>
+
+
 #include <uORB/topics/irlock_report.h>
-
-
-
-
 
 
 /**
@@ -112,7 +133,9 @@ typedef struct {
 	float ned_pos_n; /**< relative position x lhd to target [m] */
 	float ned_pos_e; /**< relative position y lhd to target [m] */
 	float ned_pos_d; /**< relative position z lhd to target [m] */
-	float vehicle_hdg; /**< relative heading lhd to target [m] */
+	float roll; /**< relative heading lhd to target [m] */
+	float pitch; /**< relative heading lhd to target [m] */
+	float yaw; /**< relative heading lhd to target [m] */
 } lhd_payload_tx_t;
 
 
@@ -120,6 +143,13 @@ typedef struct {
 typedef union {
 	lhd_payload_rx_t lhd_payload_rx;
 } lhd_rx_buf_t;
+
+
+
+/* General message and payload buffer union */
+typedef union {
+	lhd_payload_tx_t lhd_payload_tx;
+} lhd_tx_buf_t;
 
 
 
@@ -217,11 +247,6 @@ private:
 	void payloadRxDone(void);
 
 
-        void start();
-
-        void stop();
-
-
 	/**
 	 * Reads data from serial UART and places it into a buffer.
 	 */
@@ -251,29 +276,53 @@ private:
 	 * @note This function is called at open and error time.  It might make sense
 	 *       to make it more aggressive about resetting the bus in case of errors.
 	 */
-	// void start();
+	void start();
 
 	/**
 	 * Stops the automatic measurement state machine.
 	 */
+        void stop();
 
 
-	char _port[20] {};
+	void get_topics_and_send();
 
-	int _file_descriptor{-1};
+	bool msgsend_to_lhd(const lhd_tx_buf_t *payload, const uint8_t length);
 
 
-	lhd_rx_buf_t            _buf{};
+	uORB::Subscription _vehicleLocalPositionSub{ORB_ID(vehicle_local_position)};
+	uORB::Subscription _attitudeSub{ORB_ID(vehicle_attitude)};
+
+	// keep track of which topics we have received
+	bool _vehicleLocalPosition_valid{false};
+	bool _vehicleAttitude_valid{false};
+
+	vehicle_local_position_s	_vehicleLocalPosition{};
+	vehicle_attitude_s		_vehicleAttitude{};
+
+
+
+
+
+
+	char 			_port[20] {};
+
+	int 			_file_descriptor{-1};
+
+
+	lhd_tx_buf_t            _tx_buf{};
+	lhd_rx_buf_t            _rx_buf{};
+
 	lhd_decode_state_t      _decode_state{};
-	uint8_t _rx_ck_a{0};
-	uint8_t _rx_ck_b{0};
-	uint16_t _rx_payload_index = 0;
-	uint16_t _rx_payload_length = 17;
+	uint8_t 		_rx_ck_a{0};
+	uint8_t 		_rx_ck_b{0};
+	uint8_t 		_rx_payload_index = 0;
+	uint8_t 		_rx_payload_length = 17;
+	uint8_t 		_tx_payload_length = 25;
 
 
 
-	perf_counter_t _comms_errors{perf_alloc(PC_COUNT, MODULE_NAME": com_err")};
-	perf_counter_t _sample_perf{perf_alloc(PC_ELAPSED, MODULE_NAME": read")};
+	perf_counter_t 		_comms_errors{perf_alloc(PC_COUNT, MODULE_NAME": com_err")};
+	perf_counter_t 		_sample_perf{perf_alloc(PC_ELAPSED, MODULE_NAME": read")};
 
 	uORB::Publication<irlock_report_s> _irlock_report_topic{ORB_ID(irlock_report)};
 };

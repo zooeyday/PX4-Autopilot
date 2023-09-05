@@ -109,7 +109,7 @@ int	// -1 = error, 0 = ok, 1 = payload completed
 LHDOCKER::payloadRxAdd(const uint8_t b)
 {
 	int ret = 0;
-	uint8_t *p_buf = (uint8_t *)&_buf;
+	uint8_t *p_buf = (uint8_t *)&_rx_buf;
 
 	p_buf[_rx_payload_index] = b;
 
@@ -134,11 +134,11 @@ LHDOCKER::payloadRxDone()
 	const hrt_abstime timestamp_sample = hrt_absolute_time();
 	orb_report.timestamp = timestamp_sample;
 
-	orb_report.signature  = _buf.lhd_payload_rx.status;
-	orb_report.pos_x     = _buf.lhd_payload_rx.rel_pos_x;
-	orb_report.pos_y     = _buf.lhd_payload_rx.rel_pos_y;
-	orb_report.size_x    = _buf.lhd_payload_rx.rel_pos_z;
-	orb_report.size_y    = _buf.lhd_payload_rx.rel_hdg;
+	orb_report.signature  = _rx_buf.lhd_payload_rx.status;
+	orb_report.pos_x     = _rx_buf.lhd_payload_rx.rel_pos_x;
+	orb_report.pos_y     = _rx_buf.lhd_payload_rx.rel_pos_y;
+	orb_report.size_x    = _rx_buf.lhd_payload_rx.rel_pos_z;
+	orb_report.size_y    = _rx_buf.lhd_payload_rx.rel_hdg;
 
 	_irlock_report_topic.publish(orb_report);
 
@@ -229,39 +229,77 @@ LHDOCKER::parseChar(const uint8_t b)
 
 
 
-// bool
-// LHDOCKER::sendMessage(const uint16_t msg, const uint8_t *payload, const uint16_t length)
-// {
-// 	ubx_header_t   header = {UBX_SYNC1, UBX_SYNC2, 0, 0};
-// 	ubx_checksum_t checksum = {0, 0};
 
-// 	// Populate header
-// 	header.msg	= msg;
-// 	header.length	= length;
 
-// 	// Calculate checksum
-// 	calcChecksum(((uint8_t *)&header) + 2, sizeof(header) - 2, &checksum); // skip 2 sync bytes
+bool
+LHDOCKER::msgsend_to_lhd(const lhd_tx_buf_t *payload, const uint8_t length)
+{
 
-// 	if (payload != nullptr) {
-// 		calcChecksum(payload, length, &checksum);
-// 	}
+	lhd_checksum_t checksum = {0, 0};
 
-// 	// Send message
-// 	if (write((void *)&header, sizeof(header)) != sizeof(header)) {
-// 		return false;
-// 	}
+        uint8_t Buffer[29];
+	uint8_t index = 0;
 
-// 	if (payload && write((void *)payload, length) != length) {
-// 		return false;
-// 	}
 
-// 	if (write((void *)&checksum, sizeof(checksum)) != sizeof(checksum)) {
-// 		return false;
-// 	}
+        Buffer[0] = LHD_SYNC1;
+	Buffer[1] = LHD_SYNC2;
 
-// 	return true;
-// }
+        index = 2;
+	memcpy(&Buffer[index], payload, sizeof(lhd_tx_buf_t));
+        index += sizeof(lhd_tx_buf_t);
 
+
+	// Calculate payload checksum
+	if (payload != nullptr) {
+		calcChecksum((const uint8_t*)payload, length, &checksum);
+	}
+	memcpy(&Buffer[index], &checksum, sizeof(lhd_checksum_t));
+
+
+	if (::write(_file_descriptor, Buffer, sizeof(Buffer)) != sizeof(Buffer)) {
+		return false;
+	}
+
+
+	return true;
+}
+
+
+
+void
+LHDOCKER::get_topics_and_send()
+{
+
+	static uint8_t status = 0;
+	_vehicleLocalPosition_valid = _vehicleLocalPositionSub.update(&_vehicleLocalPosition);
+	_vehicleAttitude_valid = _attitudeSub.update(&_vehicleAttitude);
+
+
+      if (!_vehicleAttitude_valid || !_vehicleLocalPosition_valid ) {
+	// don't have the data needed for an update
+		return;
+       }
+
+	matrix::Eulerf _euler_attitude = matrix::Quatf(_vehicleAttitude.q);
+
+        _tx_buf.lhd_payload_tx.status = status;
+        _tx_buf.lhd_payload_tx.roll = _euler_attitude(0);
+	_tx_buf.lhd_payload_tx.pitch = _euler_attitude(1);
+ 	_tx_buf.lhd_payload_tx.yaw = _euler_attitude(2);
+	_tx_buf.lhd_payload_tx.ned_pos_n = _vehicleLocalPosition.x;
+	_tx_buf.lhd_payload_tx.ned_pos_e = _vehicleLocalPosition.y;
+	_tx_buf.lhd_payload_tx.ned_pos_d = _vehicleLocalPosition.z;
+
+
+	if( msgsend_to_lhd((const lhd_tx_buf_t *)&_tx_buf, _tx_payload_length) == false ){
+
+		PX4_ERR("send error with errno: %i", errno);
+		perf_count(_comms_errors);
+	}
+
+	status+=1;
+
+}
 
 
 int
@@ -281,7 +319,6 @@ LHDOCKER::collect()
 		/* pass received bytes to the packet decoder */
 		for (int i = 0; i < ret; i++) {
 			 parseChar(buf[i]);
-			//LHD_DEBUG("parsed %d: 0x%x", i, buf[i]);
 		}
 	} else if (ret == -1 && errno == EAGAIN) {
 		return -EAGAIN;
@@ -337,11 +374,49 @@ LHDOCKER::open_serial_port(const speed_t speed)
 	// Store the current port configuration. attributes.
 	tcgetattr(_file_descriptor, &uart_config);
 
-	// Clear ONLCR flag (which appends a CR for every LF).
-	uart_config.c_oflag &= ~ONLCR;
+	// // Clear ONLCR flag (which appends a CR for every LF).
+	// uart_config.c_oflag &= ~ONLCR;
+	// // No parity, one stop bit.
+	// uart_config.c_cflag &= ~(CSTOPB | PARENB);
 
-	// No parity, one stop bit.
-	uart_config.c_cflag &= ~(CSTOPB | PARENB);
+
+
+	/* properly configure the terminal (see also https://en.wikibooks.org/wiki/Serial_Programming/termios ) */
+	//
+	// Input flags - Turn off input processing
+	//
+	// convert break to null byte, no CR to NL translation,
+	// no NL to CR translation, don't mark parity errors or breaks
+	// no input parity check, don't strip high bit off,
+	// no XON/XOFF software flow control
+        uart_config.c_iflag &= ~(IGNBRK | BRKINT | ICRNL |
+				 INLCR | PARMRK | INPCK | ISTRIP | IXON);
+
+
+	//
+	// Output flags - Turn off output processing
+	//
+	// no CR to NL translation, no NL to CR-NL translation,
+	// no NL to CR translation, no column 0 CR suppression,
+	// no Ctrl-D suppression, no fill characters, no case mapping,
+	// no local output processing
+	//
+	// config.c_oflag &= ~(OCRNL | ONLCR | ONLRET |
+	//                     ONOCR | ONOEOT| OFILL | OLCUC | OPOST);
+	uart_config.c_oflag = 0;
+
+	//
+	// No line processing
+	//
+	// echo off, echo newline off, canonical mode off,
+	// extended input processing off, signal chars off
+	//
+	uart_config.c_lflag &= ~(ECHO | ECHONL | ICANON | IEXTEN | ISIG);
+
+	/* no parity, one stop bit, disable flow control */
+	uart_config.c_cflag &= ~(CSTOPB | PARENB | CRTSCTS);
+
+
 
 	// Set the input baud rate in the uart_config struct.
 	int termios_state = cfsetispeed(&uart_config, speed);
@@ -390,6 +465,8 @@ LHDOCKER::Run()
 
 	// Perform collection.
 	collect();
+        //
+	get_topics_and_send();
 }
 
 void
